@@ -122,18 +122,29 @@
                 <p class="mb-2 text-sm">CONTROLS:</p>
                 <p class="mb-6 text-sm"><span class="font-bold text-cyan-300">WASD</span> Move | <span class="font-bold text-cyan-300">Mouse</span> Aim/Shoot | <span class="font-bold text-cyan-300">0-9</span> Type Answer | <span class="font-bold text-cyan-300">Enter</span> Submit</p>
 
-                <!-- Difficulty Slider -->
-                <div class="mb-6">
-                    <label for="difficulty-slider" class="block text-sm font-bold mb-2 text-cyan-300">DIFFICULTY</label>
-                    <input id="difficulty-slider" type="range" min="1" max="3" value="2" class="w-full">
-                    <div class="flex justify-between text-xs px-1">
-                        <span>Easy</span>
-                        <span>Normal</span>
-                        <span>Hard</span>
+                <!-- Sliders -->
+                <div class="mb-6 grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div>
+                        <label for="difficulty-slider" class="block text-sm font-bold mb-2 text-cyan-300">DIFFICULTY</label>
+                        <input id="difficulty-slider" type="range" min="1" max="30" value="10" class="w-full">
+                        <div class="flex justify-between text-xs px-1">
+                            <span>Lvl 1</span>
+                            <span>Lvl 15</span>
+                            <span>Lvl 30</span>
+                        </div>
+                    </div>
+                    <div>
+                        <label for="speed-slider" class="block text-sm font-bold mb-2 text-cyan-300">SPEED</label>
+                        <input id="speed-slider" type="range" min="1" max="10" value="5" class="w-full">
+                        <div class="flex justify-between text-xs px-1">
+                            <span>Slow</span>
+                            <span>Normal</span>
+                            <span>Fast</span>
+                        </div>
                     </div>
                 </div>
 
-                <button id="start-button" class="btn-primary font-press-start text-xl px-8 py-4 rounded-md">Start Game</button>
+                <button id="start-button" class="btn-primary font-press-start text-xl px-8 py-4 rounded-md mt-4">Start Game</button>
             </div>
         </div>
     </div>
@@ -155,6 +166,7 @@
         let gameState = 'START'; // START, PLAYING, PAUSED, OVERDRIVE, GAMEOVER
         let score = 0;
         let difficulty = 2;
+        let gameSpeed = 5;
         const keys = {};
         const mouse = { x: 0, y: 0, down: false };
 
@@ -169,6 +181,7 @@
         const modalText = document.getElementById('modal-text');
         const startButton = document.getElementById('start-button');
         const difficultySlider = document.getElementById('difficulty-slider');
+        const speedSlider = document.getElementById('speed-slider');
 
         // --- Audio Synthesis with Tone.js ---
         const synth = new Tone.PolySynth(Tone.Synth, { oscillator: { type: 'fatsawtooth', count: 3, spread: 30 }, envelope: { attack: 0.01, decay: 0.1, sustain: 0.5, release: 0.4, attackCurve: 'exponential' } }).toDestination();
@@ -198,11 +211,13 @@
 
         // --- Classes ---
         class Player {
-            constructor(x, y) {
+            constructor(x, y, speedSetting) {
                 this.x = x;
                 this.y = y;
                 this.size = 15;
-                this.speed = 4;
+                // Map speedSetting (1-10) to a speed range (e.g., 2-6)
+                // Original speed was 4. Let's make speed 5 = 4.
+                this.speed = 2 + (speedSetting - 1) * (4 / 9);
                 this.angle = 0;
                 this.health = 100;
                 this.maxHealth = 100;
@@ -311,9 +326,12 @@
         }
 
         class Enemy {
-             constructor(x, y) {
+             constructor(x, y, speedSetting) {
                 this.x = x; this.y = y; this.size = Math.random() * 15 + 15;
-                this.speed = Math.random() * 1 + 1.5; this.health = Math.floor(this.size / 5);
+                // Map speedSetting (1-10) to an enemy speed range
+                const baseSpeed = 1 + (speedSetting - 1) * (2 / 9); // Range 1 to 3
+                this.speed = Math.random() * 0.5 + baseSpeed;
+                this.health = Math.floor(this.size / 5);
                 this.color = '#ff4d4d';
             }
             update() {
@@ -379,7 +397,7 @@
 
         // --- Game Logic Functions ---
         function init() {
-            player = new Player(gameWidth / 2, gameHeight / 2);
+            player = new Player(gameWidth / 2, gameHeight / 2, gameSpeed);
             projectiles = []; enemies = []; powerUps = []; particles = [];
             score = 0; playerAnswer = '';
             updateScore(0); generateEquation(); updatePlayerInputDisplay();
@@ -394,7 +412,7 @@
 
                 // Spawners
                 enemySpawnTimer++;
-                const spawnThreshold = 150 - (difficulty * 30);
+                const spawnThreshold = 150 - (difficulty * 3); // Adjusted for 30 levels
                 if (enemySpawnTimer > spawnThreshold) {
                     spawnEnemy(); enemySpawnTimer = 0;
                 }
@@ -497,18 +515,55 @@
 
         function generateEquation() {
             let num1, num2, op, answer;
-            switch(parseInt(difficulty)) {
-                case 1: op = '+'; num1 = Math.floor(Math.random() * 10) + 1; num2 = Math.floor(Math.random() * 10) + 1; answer = num1 + num2; break;
-                case 2:
-                    if (Math.random() > 0.5) {
-                        op = '+'; num1 = Math.floor(Math.random() * 20) + 5; num2 = Math.floor(Math.random() * 20) + 5; answer = num1 + num2;
-                    } else {
-                        op = '-'; num1 = Math.floor(Math.random() * 20) + 10; num2 = Math.floor(Math.random() * 10) + 1;
-                        if (num1 < num2) [num1, num2] = [num2, num1]; answer = num1 - num2;
-                    } break;
-                case 3: op = '×'; num1 = Math.floor(Math.random() * 9) + 2; num2 = Math.floor(Math.random() * 9) + 2; answer = num1 * num2; break;
+
+            // Clamp difficulty just in case
+            const level = Math.max(1, Math.min(30, difficulty));
+
+            if (level <= 10) { // Levels 1-10: Addition Focus
+                op = '+';
+                const maxNum = Math.floor(5 + (level - 1) * 2.5); // Scales from 5 to 30
+                num1 = Math.floor(Math.random() * maxNum) + 1;
+                num2 = Math.floor(Math.random() * maxNum) + 1;
+                answer = num1 + num2;
+
+            } else if (level <= 20) { // Levels 11-20: Subtraction Introduced
+                const maxNum1 = Math.floor(30 + (level - 11) * 3); // Scales from 30 to 60
+                const maxNum2 = Math.floor(20 + (level - 11) * 3); // Scales from 20 to 50
+
+                if (Math.random() > 0.5) { // Addition
+                    op = '+';
+                    num1 = Math.floor(Math.random() * maxNum1) + 10;
+                    num2 = Math.floor(Math.random() * maxNum2) + 1;
+                    answer = num1 + num2;
+                } else { // Subtraction
+                    op = '-';
+                    num1 = Math.floor(Math.random() * maxNum1) + maxNum2; // Ensure num1 is large enough
+                    num2 = Math.floor(Math.random() * maxNum2) + 1;
+                    answer = num1 - num2;
+                }
+
+            } else { // Levels 21-30: Two-Digit Operations
+                const minNum = 10;
+                const maxNum = Math.floor(70 + (level - 21) * 2.9); // Scales from 70 to ~99
+
+                if (Math.random() > 0.5) { // Addition
+                    op = '+';
+                    num1 = Math.floor(Math.random() * (maxNum - minNum + 1)) + minNum;
+                    num2 = Math.floor(Math.random() * (maxNum - minNum + 1)) + minNum;
+                    answer = num1 + num2;
+                } else { // Subtraction
+                    op = '-';
+                    // Ensure no negative answers
+                    const a = Math.floor(Math.random() * (maxNum - minNum + 1)) + minNum;
+                    const b = Math.floor(Math.random() * (maxNum - minNum + 1)) + minNum;
+                    num1 = Math.max(a, b);
+                    num2 = Math.min(a, b);
+                    answer = num1 - num2;
+                }
             }
-            currentEquation.text = `${num1} ${op} ${num2} = ?`; currentEquation.answer = answer.toString();
+
+            currentEquation.text = `${num1} ${op} ${num2} = ?`;
+            currentEquation.answer = answer.toString();
             equationDisplay.textContent = currentEquation.text;
         }
 
@@ -518,7 +573,7 @@
             else if (edge === 1) { x = gameWidth; y = Math.random() * gameHeight; }
             else if (edge === 2) { x = Math.random() * gameWidth; y = 0; }
             else { x = Math.random() * gameWidth; y = gameHeight; }
-            enemies.push(new Enemy(x, y));
+            enemies.push(new Enemy(x, y, gameSpeed));
         }
 
         function spawnPowerUp() {
@@ -580,7 +635,8 @@
                 pauseTimer = PAUSE_DURATION;
             } else if (newState === 'PLAYING') {
                 if (oldState === 'GAMEOVER' || oldState === 'START') {
-                    difficulty = difficultySlider.value;
+                    difficulty = parseInt(difficultySlider.value);
+                    gameSpeed = parseInt(speedSlider.value);
                     init();
                     modal.classList.add('hidden');
                     hud.classList.remove('hidden');
