@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Asteroid Shooter - Upgraded</title>
+    <style>
+        body {
+            margin: 0;
+            background-color: #000;
+            color: #fff;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            font-family: 'Courier New', Courier, monospace;
+        }
+        #game-container {
+            position: relative;
+            border: 2px solid #fff;
+        }
+        canvas {
+            display: block;
+            background-color: #000;
+        }
+        #math-modal {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.8);
+            display: none; /* Hidden by default */
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+        }
+        #math-modal h2 {
+            font-size: 2em;
+            color: #0ff;
+        }
+        #math-modal p {
+            font-size: 1.5em;
+        }
+        #answer-input {
+            width: 200px;
+            padding: 10px;
+            font-size: 1.2em;
+            text-align: center;
+            background: #111;
+            border: 2px solid #fff;
+            color: #fff;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <canvas id="gameCanvas" width="800" height="600"></canvas>
+        <div id="math-modal">
+            <h2>WEAPON UPGRADE</h2>
+            <p id="question-text">2 + 2 = ?</p>
+            <input type="text" id="answer-input" autofocus>
+            <p style="font-size: 0.8em; color: #0f0; margin-top: 20px;">Type your answer and press ENTER</p>
+        </div>
+    </div>
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const mathModal = document.getElementById('math-modal');
+        const questionText = document.getElementById('question-text');
+        const answerInput = document.getElementById('answer-input');
+
+        const SCREEN_WIDTH = canvas.width;
+        const SCREEN_HEIGHT = canvas.height;
+        const FPS = 60;
+
+        // --- Game State ---
+        let score, lives, gameOver, pausedForQuestion, gameStarted;
+        let player, bullets, asteroids, powerups;
+        let powerupSpawnTimer;
+
+        const mathProblem = {
+            question: "",
+            answer: null,
+            generate(level) {
+                let a, b, c, r1, r2;
+                switch(level) {
+                    case 1: // For level 2
+                        a = Math.floor(Math.random() * 9) + 1;
+                        b = Math.floor(Math.random() * 9) + 1;
+                        this.question = `${a} + ${b} = ?`;
+                        this.answer = (a + b).toString();
+                        break;
+                    case 2: // For level 3
+                        a = Math.floor(Math.random() * 15) + 2;
+                        b = Math.floor(Math.random() * 9) + 2;
+                        this.question = `${a} × ${b} = ?`;
+                        this.answer = (a * b).toString();
+                        break;
+                    case 3: // For level 4
+                        a = Math.floor(Math.random() * 8) + 2;
+                        c = Math.floor(Math.random() * 10) + 1;
+                        b = Math.floor(Math.random() * 10) + 1;
+                        const result = a * c + b;
+                        this.question = `${a}x + ${b} = ${result}`;
+                        this.answer = c.toString();
+                        break;
+                    case 4: // For level 5
+                        r1 = Math.floor(Math.random() * 11) - 5; // -5 to 5
+                        r2 = Math.floor(Math.random() * 11) - 5;
+                        if (r1 === 0) r1 = 6; if (r2 === 0) r2 = -6; // Avoid 0 roots
+                        b = -(r1 + r2);
+                        c = r1 * r2;
+                        const signB = b >= 0 ? `+ ${b}` : `- ${-b}`;
+                        const signC = c >= 0 ? `+ ${c}` : `- ${-c}`;
+                        this.question = `x² ${signB}x ${signC} = 0 (one root?)`;
+                        this.answer = [r1.toString(), r2.toString()];
+                        break;
+                }
+            },
+            checkAnswer(userAnswer) {
+                if (Array.isArray(this.answer)) {
+                    return this.answer.includes(userAnswer);
+                }
+                return userAnswer === this.answer;
+            }
+        };
+
+        // --- Input Handling ---
+        const keys = {};
+        window.addEventListener('keydown', (e) => {
+            if (gameOver && e.code === 'KeyR') newGame();
+            keys[e.code] = true;
+        });
+        window.addEventListener('keyup', (e) => { keys[e.code] = false; });
+        answerInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                if (mathProblem.checkAnswer(answerInput.value.trim())) {
+                    player.levelUpWeapon();
+                }
+                pausedForQuestion = false;
+                mathModal.style.display = 'none';
+                answerInput.value = '';
+            }
+        });
+
+        // --- Classes ---
+        class Player {
+            constructor() {
+                this.pos = { x: SCREEN_WIDTH / 2, y: SCREEN_HEIGHT / 2 };
+                this.vel = { x: 0, y: 0 };
+                this.angle = -Math.PI / 2;
+                this.size = 15;
+                this.rotationSpeed = 0.05;
+                this.thrustPower = 0.1;
+                this.friction = 0.985;
+                this.weaponLevel = 1;
+                this.lastShotTime = 0;
+                this.fireRate = 500;
+                this.isInvincible = false;
+                this.invincibilityTime = 2;
+                this.invincibilityTimer = 0;
+            }
+            update() {
+                if (this.isInvincible) {
+                    this.invincibilityTimer -= 1 / FPS;
+                    if (this.invincibilityTimer <= 0) this.isInvincible = false;
+                }
+                if (keys['ArrowLeft'] || keys['KeyA']) this.angle -= this.rotationSpeed;
+                if (keys['ArrowRight'] || keys['KeyD']) this.angle += this.rotationSpeed;
+                if (keys['ArrowUp'] || keys['KeyW']) {
+                    this.vel.x += Math.cos(this.angle) * this.thrustPower;
+                    this.vel.y += Math.sin(this.angle) * this.thrustPower;
+                }
+                this.vel.x *= this.friction;
+                this.vel.y *= this.friction;
+                this.pos.x += this.vel.x;
+                this.pos.y += this.vel.y;
+                this.wrapAroundScreen();
+            }
+            draw(ctx) {
+                if (this.isInvincible && Math.floor(Date.now() / 100) % 2 === 0) return;
+                ctx.save();
+                ctx.translate(this.pos.x, this.pos.y);
+                ctx.rotate(this.angle);
+                ctx.beginPath();
+                ctx.moveTo(this.size, 0);
+                ctx.lineTo(-this.size / 2, -this.size / 1.5);
+                ctx.lineTo(-this.size / 2, this.size / 1.5);
+                ctx.closePath();
+                ctx.strokeStyle = 'white';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+                ctx.restore();
+            }
+            wrapAroundScreen() {
+                if (this.pos.x > SCREEN_WIDTH + this.size) this.pos.x = -this.size;
+                if (this.pos.x < -this.size) this.pos.x = SCREEN_WIDTH + this.size;
+                if (this.pos.y > SCREEN_HEIGHT + this.size) this.pos.y = -this.size;
+                if (this.pos.y < -this.size) this.pos.y = SCREEN_HEIGHT + this.size;
+            }
+            shoot(bullets) {
+                const now = Date.now();
+                if (now - this.lastShotTime > this.fireRate) {
+                    this.lastShotTime = now;
+                    const bulletSpeed = 7;
+                    bullets.push(new Bullet(this.pos, this.angle, bulletSpeed));
+                    if (this.weaponLevel >= 2) {
+                        bullets.push(new Bullet(this.pos, this.angle - 0.3, bulletSpeed));
+                        bullets.push(new Bullet(this.pos, this.angle + 0.3, bulletSpeed));
+                    }
+                    if (this.weaponLevel >= 4) {
+                        bullets.push(new Bullet(this.pos, this.angle + Math.PI, bulletSpeed));
+                    }
+                }
+            }
+            levelUpWeapon() {
+                if (this.weaponLevel < 5) {
+                    this.weaponLevel++;
+                    if (this.weaponLevel === 3) this.fireRate = 300;
+                    if (this.weaponLevel === 5) this.fireRate = 150;
+                }
+            }
+            reset() {
+                this.pos = { x: SCREEN_WIDTH / 2, y: SCREEN_HEIGHT / 2 };
+                this.vel = { x: 0, y: 0 };
+                this.angle = -Math.PI / 2;
+                this.isInvincible = true;
+                this.invincibilityTimer = this.invincibilityTime;
+            }
+        }
+        class Bullet {
+            constructor(pos, angle, speed) {
+                this.pos = { x: pos.x, y: pos.y };
+                this.vel = { x: Math.cos(angle) * speed, y: Math.sin(angle) * speed };
+                this.radius = 2;
+                this.lifespan = 1.5;
+                this.creationTime = Date.now();
+                this.toRemove = false;
+            }
+            update() {
+                this.pos.x += this.vel.x;
+                this.pos.y += this.vel.y;
+                if ((Date.now() - this.creationTime) / 1000 > this.lifespan) this.toRemove = true;
+            }
+            draw(ctx) {
+                ctx.fillStyle = 'white';
+                ctx.beginPath();
+                ctx.arc(this.pos.x, this.pos.y, this.radius, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+        class Asteroid {
+            constructor(pos, size = 'large') {
+                this.size = size;
+                switch (size) {
+                    case 'large': this.radius = 40; this.scoreValue = 20; break;
+                    case 'medium': this.radius = 20; this.scoreValue = 50; break;
+                    case 'small': this.radius = 10; this.scoreValue = 100; break;
+                }
+                this.pos = pos || this.getRandomPosition();
+                this.vel = { x: Math.random() * 2 - 1, y: Math.random() * 2 - 1 };
+                if (this.vel.x === 0 && this.vel.y === 0) this.vel.x = 1;
+                this.vertices = this.generateShape();
+                this.toRemove = false;
+            }
+            getRandomPosition() {
+                const edge = Math.floor(Math.random() * 4);
+                if (edge === 0) return { x: Math.random() * SCREEN_WIDTH, y: 0 - this.radius };
+                if (edge === 1) return { x: SCREEN_WIDTH + this.radius, y: Math.random() * SCREEN_HEIGHT };
+                if (edge === 2) return { x: Math.random() * SCREEN_WIDTH, y: SCREEN_HEIGHT + this.radius };
+                return { x: 0 - this.radius, y: Math.random() * SCREEN_HEIGHT };
+            }
+            generateShape() {
+                const vertices = [];
+                const numVertices = 12;
+                for (let i = 0; i < numVertices; i++) {
+                    const angle = (i / numVertices) * Math.PI * 2;
+                    const radius = this.radius * (1 + (Math.random() * 0.4 - 0.2));
+                    vertices.push({ x: Math.cos(angle) * radius, y: Math.sin(angle) * radius });
+                }
+                return vertices;
+            }
+            update() {
+                this.pos.x += this.vel.x;
+                this.pos.y += this.vel.y;
+                this.wrapAroundScreen();
+            }
+            draw(ctx) {
+                ctx.save();
+                ctx.translate(this.pos.x, this.pos.y);
+                ctx.beginPath();
+                ctx.moveTo(this.vertices[0].x, this.vertices[0].y);
+                for (let i = 1; i < this.vertices.length; i++) ctx.lineTo(this.vertices[i].x, this.vertices[i].y);
+                ctx.closePath();
+                ctx.strokeStyle = 'white';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+                ctx.restore();
+            }
+            wrapAroundScreen() {
+                if (this.pos.x > SCREEN_WIDTH + this.radius) this.pos.x = -this.radius;
+                if (this.pos.x < -this.radius) this.pos.x = SCREEN_WIDTH + this.radius;
+                if (this.pos.y > SCREEN_HEIGHT + this.radius) this.pos.y = -this.radius;
+                if (this.pos.y < -this.radius) this.pos.y = SCREEN_HEIGHT + this.radius;
+            }
+        }
+        class PowerUp {
+            constructor() {
+                this.pos = { x: Math.random() * (SCREEN_WIDTH - 100) + 50, y: Math.random() * (SCREEN_HEIGHT - 100) + 50 };
+                this.radius = 15;
+                this.lifespan = 10; // seconds
+                this.creationTime = Date.now();
+                this.toRemove = false;
+            }
+            update() {
+                if ((Date.now() - this.creationTime) / 1000 > this.lifespan) this.toRemove = true;
+            }
+            draw(ctx) {
+                ctx.save();
+                ctx.translate(this.pos.x, this.pos.y);
+                ctx.fillStyle = 'cyan';
+                ctx.strokeStyle = 'white';
+                ctx.lineWidth = 2;
+                if (Math.floor(Date.now() / 250) % 2 === 0) ctx.globalAlpha = 0.5;
+                ctx.beginPath();
+                ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.stroke();
+                ctx.fillStyle = 'black';
+                ctx.font = 'bold 20px "Courier New"';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText('?', 0, 1);
+                ctx.restore();
+            }
+        }
+
+        function checkCollision(pos1, r1, pos2, r2) {
+            const dx = pos1.x - pos2.x;
+            const dy = pos1.y - pos2.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            return dist < r1 + r2;
+        }
+
+        function spawnAsteroid(pos, size) { asteroids.push(new Asteroid(pos, size)); }
+        function spawnPowerup() { powerups.push(new PowerUp()); }
+
+        function newGame() {
+            score = 0; lives = 3; gameOver = false;
+            pausedForQuestion = false; gameStarted = true;
+            player = new Player();
+            bullets = []; asteroids = []; powerups = [];
+            for (let i = 0; i < 5; i++) spawnAsteroid();
+            powerupSpawnTimer = 15000; // 15 seconds
+        }
+
+        function showStartScreen() {
+            ctx.fillStyle = 'black';
+            ctx.fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+            ctx.fillStyle = 'white';
+            ctx.font = '50px "Courier New"';
+            ctx.textAlign = 'center';
+            ctx.fillText('Asteroid Shooter', SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2 - 50);
+            ctx.font = '20px "Courier New"';
+            ctx.fillText('Press any key to start', SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2 + 20);
+        }
+
+        function drawHUD() {
+            ctx.fillStyle = 'white';
+            ctx.font = '24px "Courier New"';
+            ctx.textAlign = 'left';
+            ctx.fillText(`Score: ${score}`, 10, 30);
+            ctx.textAlign = 'right';
+            ctx.fillText(`Lives: ${lives}`, SCREEN_WIDTH - 10, 30);
+            ctx.textAlign = 'center';
+            ctx.fillText(`Weapon Lvl: ${player.weaponLevel}`, SCREEN_WIDTH / 2, 30);
+        }
+
+        function drawGameOver() {
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+            ctx.fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+            ctx.fillStyle = 'red';
+            ctx.font = '50px "Courier New"';
+            ctx.textAlign = 'center';
+            ctx.fillText('GAME OVER', SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2);
+            ctx.fillStyle = 'white';
+            ctx.font = '20px "Courier New"';
+            ctx.fillText("Press 'R' to Restart", SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2 + 40);
+        }
+
+        function update() {
+            if (gameOver || pausedForQuestion) return;
+
+            if (keys['Space']) player.shoot(bullets);
+            player.update();
+            powerups.forEach(p => p.update());
+
+            // Handle collisions
+            for (let i = asteroids.length - 1; i >= 0; i--) {
+                const asteroid = asteroids[i];
+                asteroid.update();
+                if (!player.isInvincible && checkCollision(player.pos, player.size, asteroid.pos, asteroid.radius)) {
+                    asteroid.toRemove = true;
+                    lives--;
+                    if (lives <= 0) gameOver = true;
+                    else player.reset();
+                }
+                for (let j = bullets.length - 1; j >= 0; j--) {
+                    const bullet = bullets[j];
+                    if (checkCollision(bullet.pos, bullet.radius, asteroid.pos, asteroid.radius)) {
+                        bullet.toRemove = true;
+                        asteroid.toRemove = true;
+                        score += asteroid.scoreValue;
+                        if (asteroid.size === 'large') {
+                            spawnAsteroid(asteroid.pos, 'medium');
+                            spawnAsteroid(asteroid.pos, 'medium');
+                        } else if (asteroid.size === 'medium') {
+                            spawnAsteroid(asteroid.pos, 'small');
+                            spawnAsteroid(asteroid.pos, 'small');
+                        }
+                    }
+                }
+            }
+
+            for (let i = powerups.length - 1; i >= 0; i--) {
+                const powerup = powerups[i];
+                if (checkCollision(player.pos, player.size, powerup.pos, powerup.radius)) {
+                    powerup.toRemove = true;
+                    if(player.weaponLevel < 5) {
+                        pausedForQuestion = true;
+                        mathProblem.generate(player.weaponLevel);
+                        questionText.innerText = mathProblem.question;
+                        mathModal.style.display = 'flex';
+                        answerInput.focus();
+                    }
+                }
+            }
+
+            // Remove marked items
+            bullets = bullets.filter(b => !b.toRemove);
+            asteroids = asteroids.filter(a => !a.toRemove);
+            powerups = powerups.filter(p => !p.toRemove);
+
+            // Spawn new asteroids if needed
+            if (asteroids.length < 3) spawnAsteroid();
+
+            // Spawn powerups
+            powerupSpawnTimer -= 1000 / FPS;
+            if (powerupSpawnTimer <= 0 && powerups.length === 0) {
+                spawnPowerup();
+                powerupSpawnTimer = 20000;
+            }
+        }
+
+        function draw() {
+            ctx.fillStyle = 'black';
+            ctx.fillRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+
+            if (!gameOver) {
+                player.draw(ctx);
+                bullets.forEach(b => b.draw(ctx));
+                asteroids.forEach(a => a.draw(ctx));
+                powerups.forEach(p => p.draw(ctx));
+            }
+
+            drawHUD();
+            if (gameOver) drawGameOver();
+        }
+
+        function gameLoop() {
+            if (!gameStarted) {
+                showStartScreen();
+                if (Object.values(keys).some(k => k)) newGame();
+            } else {
+                update();
+                draw();
+            }
+            requestAnimationFrame(gameLoop);
+        }
+
+        // --- Start the game ---
+        gameStarted = false;
+        gameLoop();
+    </script>
+</body>
+</html>
