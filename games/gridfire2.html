@@ -974,6 +974,14 @@
                 modalTitle.textContent = 'GAME OVER';
                 modalText.textContent = `Your final score on ${['','Easy','Normal','Hard'][difficulty]} difficulty: ${score}`;
                 startButton.textContent = 'Retry';
+            } else if (newState === 'START') {
+                modal.classList.remove('hidden');
+                hud.classList.add('hidden');
+                modalTitle.textContent = 'GRIDFIRE';
+                modalText.innerHTML = `Solve math problems to charge your super-weapon. Survive the onslaught.</p>
+                <p class="mb-2 text-sm">CONTROLS:</p>
+                <p class="mb-6 text-sm"><span class="font-bold text-cyan-300">WASD</span> Move | <span class="font-bold text-cyan-300">Mouse</span> Aim/Shoot | <span class="font-bold text-cyan-300">0-9</span> Type Answer | <span class="font-bold text-cyan-300">Enter</span> Submit`;
+                startButton.textContent = 'Start Game';
             }
         }
 
@@ -981,7 +989,9 @@
         window.addEventListener('keydown', e => {
             keys[e.key.toLowerCase()] = true;
             if (gameState === 'PLAYING' || gameState === 'OVERDRIVE' || gameState === 'PAUSED') {
-                if (!isNaN(e.key) && e.key.trim() !== '') {
+                if (e.key === 'Escape') {
+                    setGameState('START');
+                } else if (!isNaN(e.key) && e.key.trim() !== '') {
                     playerAnswer += e.key; updatePlayerInputDisplay();
                 } else if (e.key === 'Backspace') {
                     playerAnswer = playerAnswer.slice(0, -1); updatePlayerInputDisplay();
