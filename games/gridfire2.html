@@ -93,6 +93,12 @@
                     </div>
                 </div>
                 <div class="hud-element">
+                    <h2 class="text-sm font-bold text-blue-300">SHIELD</h2>
+                    <div class="w-48 h-4 bg-gray-700 rounded-full border border-blue-300">
+                        <div id="shield-bar" class="h-full bg-blue-300 rounded-full transition-all duration-300" style="width: 100%;"></div>
+                    </div>
+                </div>
+                <div class="hud-element">
                     <h2 class="text-sm font-bold text-yellow-300">SCORE</h2>
                     <p id="score" class="text-2xl font-bold">0</p>
                 </div>
@@ -172,6 +178,7 @@
 
         const hud = document.getElementById('hud');
         const healthBar = document.getElementById('health-bar');
+        const shieldBar = document.getElementById('shield-bar');
         const scoreDisplay = document.getElementById('score');
         const equationDisplay = document.getElementById('equation');
         const playerInputDisplay = document.getElementById('player-input');
@@ -198,6 +205,7 @@
         let enemies = [];
         let powerUps = [];
         let particles = [];
+        let lootDrops = [];
 
         // --- Game Logic Variables ---
         let currentEquation = { text: '', answer: '' };
@@ -215,15 +223,21 @@
                 this.x = x;
                 this.y = y;
                 this.size = 15;
-                // Map speedSetting (1-10) to a speed range (e.g., 2-6)
-                // Original speed was 4. Let's make speed 5 = 4.
                 this.speed = 2 + (speedSetting - 1) * (4 / 9);
                 this.angle = 0;
                 this.health = 100;
                 this.maxHealth = 100;
+
+                // Equipment
+                this.weapon = { type: 'weapon', rarity: 'common', name: 'Standard Issue', damage: 5, fireRate: 20, projectileCount: 1, elemental: null };
+                this.shield = {
+                    type: 'shield', rarity: 'common', name: 'Basic Shield',
+                    capacity: 25, rechargeRate: 5, rechargeDelay: 5000,
+                    current: 25, rechargeTimer: 0, shieldType: 'standard'
+                };
+
                 this.shootCooldown = 0;
                 this.overdriveShootCooldown = 0;
-                this.hasShield = false;
                 this.fastFireTimer = 0;
             }
 
@@ -247,18 +261,28 @@
                 if (this.shootCooldown > 0) this.shootCooldown--;
                 if (this.overdriveShootCooldown > 0) this.overdriveShootCooldown--;
                 if (this.fastFireTimer > 0) this.fastFireTimer--;
+                if (this.shield.rechargeTimer > 0) {
+                    this.shield.rechargeTimer -= 1000/60;
+                } else if (this.shield.current < this.shield.capacity) {
+                    this.shield.current = Math.min(this.shield.capacity, this.shield.current + this.shield.rechargeRate / 60);
+                    updateShieldBar();
+                }
 
                 // Shooting
                 if (mouse.down) {
-                    const baseCooldown = this.fastFireTimer > 0 ? 7 : 15;
+                    const baseCooldown = this.fastFireTimer > 0 ? Math.floor(this.weapon.fireRate / 2) : this.weapon.fireRate;
                     if (gameState === 'PLAYING' && this.shootCooldown === 0) {
-                        projectiles.push(new Projectile(this.x, this.y, this.angle, 5, 7, '#00ffff'));
+                        const spread = 0.2; // Radians
+                        for (let i = 0; i < this.weapon.projectileCount; i++) {
+                            const angle = this.angle + (Math.random() - 0.5) * spread;
+                            projectiles.push(new Projectile(this.x, this.y, angle, 5, 7, '#00ffff', 60, this.weapon.damage, this.weapon.elemental));
+                        }
                         this.shootCooldown = baseCooldown;
                         laserSound();
                     } else if (gameState === 'OVERDRIVE' && this.overdriveShootCooldown === 0) {
                         for (let i = 0; i < 24; i++) {
                             const angle = (i / 24) * Math.PI * 2;
-                            projectiles.push(new Projectile(this.x, this.y, angle, 3, 10, '#ff00ff', 40));
+                            projectiles.push(new Projectile(this.x, this.y, angle, 3, 10, '#ff00ff', 40, this.weapon.damage * 2, null));
                         }
                         this.overdriveShootCooldown = 5;
                         laserSound();
@@ -270,16 +294,21 @@
                 ctx.save();
                 ctx.translate(this.x, this.y);
 
-                if (this.hasShield) {
-                    ctx.fillStyle = 'rgba(0, 255, 255, 0.2)';
+                // Draw Shield
+                if (this.shield.current > 0) {
+                    const shieldPercentage = this.shield.current / this.shield.capacity;
+                    const shieldPulse = this.shield.rechargeTimer > 0 ? Math.abs(Math.sin(Date.now() / 100)) * 0.1 : 0; // Flicker when damaged
+                    ctx.fillStyle = `rgba(0, 255, 255, ${0.1 + shieldPulse})`;
                     ctx.strokeStyle = '#00ffff';
                     ctx.lineWidth = 2;
                     ctx.shadowColor = '#00ffff';
                     ctx.shadowBlur = 15;
                     ctx.beginPath();
+                    ctx.arc(0, 0, this.size + 10, -Math.PI / 2, -Math.PI / 2 + (Math.PI * 2 * shieldPercentage), false);
+                    ctx.stroke();
+                    ctx.beginPath();
                     ctx.arc(0, 0, this.size + 10, 0, Math.PI * 2);
                     ctx.fill();
-                    ctx.stroke();
                 }
 
                 ctx.rotate(this.angle);
@@ -298,29 +327,55 @@
             }
 
             takeDamage(amount) {
-                if (this.hasShield) {
-                    this.hasShield = false;
-                    createParticles(this.x, this.y, 30, '#00ffff');
-                    return;
+                this.shield.rechargeTimer = this.shield.rechargeDelay;
+                let damageAbsorbed = 0;
+
+                if (this.shield.current > 0) {
+                    damageAbsorbed = Math.min(this.shield.current, amount);
+                    this.shield.current -= damageAbsorbed;
+                    amount -= damageAbsorbed;
+                    createParticles(this.x, this.y, 10, '#00ffff');
+                    updateShieldBar();
+
+                    if (this.shield.current <= 0) {
+                        // Shield broke, trigger nova if it's a nova shield
+                        if (this.shield.shieldType === 'nova') {
+                            createParticles(this.x, this.y, 50, '#ff00ff');
+                            explosionSound();
+                            enemies.forEach(e => {
+                                if (Math.hypot(this.x - e.x, this.y - e.y) < this.shield.novaRadius) {
+                                    e.takeDamage(this.shield.novaDamage, null);
+                                }
+                            });
+                        }
+                    }
                 }
-                this.health -= amount;
-                createParticles(this.x, this.y, 20, '#ff4d4d');
-                if (this.health <= 0) {
-                    this.health = 0;
-                    setGameState('GAMEOVER');
+
+                if (amount > 0) {
+                    this.health -= amount;
+                    createParticles(this.x, this.y, 20, '#ff4d4d');
+                    updateHealthBar();
+                    if (this.health <= 0) {
+                        this.health = 0;
+                        setGameState('GAMEOVER');
+                    }
                 }
             }
         }
 
         class Projectile {
-            constructor(x, y, angle, size, speed, color, life = 60) {
+            constructor(x, y, angle, size, speed, color, life = 60, damage = 1, elemental = null) {
                 this.x = x; this.y = y; this.size = size; this.speed = speed; this.color = color;
                 this.vx = Math.cos(angle) * this.speed; this.vy = Math.sin(angle) * this.speed;
                 this.life = life;
+                this.damage = damage;
+                this.elemental = elemental;
             }
             update() { this.x += this.vx; this.y += this.vy; this.life--; }
             draw() {
-                ctx.fillStyle = this.color; ctx.shadowColor = this.color; ctx.shadowBlur = 10;
+                ctx.fillStyle = this.elemental ? '#ff6600' : this.color;
+                ctx.shadowColor = this.elemental ? '#ff6600' : this.color;
+                ctx.shadowBlur = 10;
                 ctx.beginPath(); ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2); ctx.fill();
             }
         }
@@ -328,25 +383,57 @@
         class Enemy {
              constructor(x, y, speedSetting) {
                 this.x = x; this.y = y; this.size = Math.random() * 15 + 15;
-                // Map speedSetting (1-10) to an enemy speed range
                 const baseSpeed = 1 + (speedSetting - 1) * (2 / 9); // Range 1 to 3
                 this.speed = Math.random() * 0.5 + baseSpeed;
                 this.health = Math.floor(this.size / 5);
                 this.color = '#ff4d4d';
+                this.statusEffects = [];
             }
             update() {
+                // Status effects
+                this.statusEffects.forEach(effect => {
+                    this.health -= effect.dps / 60; // Apply damage per frame
+                    effect.duration -= 1000/60;
+                });
+                this.statusEffects = this.statusEffects.filter(effect => effect.duration > 0);
+                if (this.health <= 0 && !this.isDestroyed) {
+                    this.destroy();
+                }
+
                 const dx = player.x - this.x; const dy = player.y - this.y;
                 const angle = Math.atan2(dy, dx);
                 this.x += Math.cos(angle) * this.speed; this.y += Math.sin(angle) * this.speed;
             }
             draw() {
-                ctx.fillStyle = this.color; ctx.shadowColor = this.color; ctx.shadowBlur = 10;
+                const onFire = this.statusEffects.some(e => e.type === 'fire');
+                ctx.fillStyle = onFire ? '#ff6600' : this.color;
+                ctx.shadowColor = onFire ? '#ff6600' : this.color;
+                ctx.shadowBlur = 10;
                 ctx.fillRect(this.x - this.size / 2, this.y - this.size / 2, this.size, this.size);
+                if (onFire) {
+                    createParticles(this.x, this.y, 1, '#ff6600');
+                }
             }
-            takeDamage(amount) { this.health -= amount; if (this.health <= 0) { this.destroy(); } }
+            takeDamage(amount, elemental = null) {
+                if (this.isDestroyed) return;
+                this.health -= amount;
+                if (elemental) {
+                    const existingEffect = this.statusEffects.find(e => e.type === elemental.type);
+                    if (existingEffect) {
+                        existingEffect.duration = Math.max(existingEffect.duration, elemental.duration);
+                    } else {
+                        this.statusEffects.push({...elemental}); // Add a copy
+                    }
+                }
+                if (this.health <= 0) { this.destroy(); }
+            }
             destroy() {
-                createParticles(this.x, this.y, this.size, this.color); explosionSound();
-                updateScore(Math.floor(this.size)); this.isDestroyed = true;
+                if (this.isDestroyed) return;
+                this.isDestroyed = true;
+                createParticles(this.x, this.y, this.size, this.color);
+                explosionSound();
+                updateScore(Math.floor(this.size));
+                generateLoot(this.x, this.y);
             }
         }
 
@@ -395,12 +482,196 @@
             }
         }
 
+        // --- Loot System ---
+        const rarities = {
+            common:    { color: '#ffffff', name: 'Common', statMultiplier: 1.0 },
+            uncommon:  { color: '#1eff00', name: 'Uncommon', statMultiplier: 1.4 },
+            rare:      { color: '#0070dd', name: 'Rare', statMultiplier: 2.0 },
+            epic:      { color: '#a335ee', name: 'Epic', statMultiplier: 2.8 },
+            legendary: { color: '#ff8000', name: 'Legendary', statMultiplier: 4.0 }
+        };
+
+        const manufacturers = {
+            "Atlas": {
+                name: "Atlas",
+                weaponBonus: (stats) => { stats.damage *= 1.1; stats.fireRate *= 0.9; return stats; },
+                shieldBonus: (stats) => { stats.capacity *= 1.2; stats.rechargeRate *= 1.1; return stats; }
+            },
+            "Tediore": {
+                name: "Tediore",
+                weaponBonus: (stats) => { stats.fireRate *= 0.7; stats.damage *= 0.9; return stats; },
+                shieldBonus: (stats) => { stats.capacity *= 0.8; stats.rechargeDelay *= 0.8; return stats; }
+            },
+            "Maliwan": {
+                name: "Maliwan",
+                weaponBonus: (stats) => { stats.damage *= 1.0; return stats; }, // Will add elemental later
+                shieldBonus: (stats) => { stats.rechargeRate *= 1.5; stats.capacity *= 0.9; return stats; }
+            },
+            "Vladof": {
+                name: "Vladof",
+                weaponBonus: (stats) => { stats.fireRate *= 0.5; stats.damage *= 0.85; return stats; },
+                shieldBonus: (stats) => { stats.capacity *= 1.0; stats.rechargeDelay *= 1.2; return stats; }
+            }
+        };
+
+        function generateLoot(x, y) {
+            const dropRoll = Math.random();
+            // Drop chance: 25% for any loot
+            if (dropRoll > 0.75) {
+                const typeRoll = Math.random();
+                let item;
+                if (typeRoll < 0.5) { // 50% chance for Weapon
+                    item = generateWeapon();
+                } else if (typeRoll < 0.85) { // 35% chance for Shield
+                    item = generateShield();
+                } else { // 15% chance for Bomb
+                    item = generateBomb();
+                }
+                lootDrops.push(new LootDrop(x, y, item));
+            }
+        }
+
+        function getRarity() {
+            const roll = Math.random();
+            if (roll < 0.60) return 'common';    // 60%
+            if (roll < 0.85) return 'uncommon';  // 25%
+            if (roll < 0.95) return 'rare';      // 10%
+            if (roll < 0.99) return 'epic';      // 4%
+            return 'legendary';                 // 1%
+        }
+
+        function generateBomb() {
+             const rarity = getRarity();
+             const baseRadius = 75;
+             return {
+                type: 'bomb',
+                rarity: rarity,
+                name: `${rarities[rarity].name} Detonator`,
+                radius: Math.round((baseRadius * rarities[rarity].statMultiplier) * (Math.random() * 0.4 + 0.8)),
+             };
+        }
+
+        function generateWeapon() {
+            const rarity = getRarity();
+            const mfgKeys = Object.keys(manufacturers);
+            const mfg = manufacturers[mfgKeys[Math.floor(Math.random() * mfgKeys.length)]];
+
+            let stats = {
+                damage: Math.round((5 * rarities[rarity].statMultiplier) * (Math.random() * 0.4 + 0.8)),
+                fireRate: Math.max(5, Math.round((20 / rarities[rarity].statMultiplier) * (Math.random() * 0.4 + 0.8))),
+                projectileCount: 1,
+                elemental: null,
+            };
+
+            // Add variety
+            if (Math.random() < 0.15) { // 15% chance for a shotgun
+                stats.projectileCount = Math.floor(Math.random() * 5) + 3; // 3-7 projectiles
+                stats.damage *= 0.4; // Adjust damage for balance
+                stats.fireRate *= 1.5;
+            }
+
+            let elementalChance = mfg.name === 'Maliwan' ? 0.8 : 0.1;
+            if (Math.random() < elementalChance) { // 10% base chance for elemental, 80% for Maliwan
+                stats.elemental = { type: 'fire', dps: 5 * rarities[rarity].statMultiplier, duration: 3000 };
+            }
+
+            stats = mfg.weaponBonus(stats);
+
+            return {
+                type: 'weapon',
+                rarity: rarity,
+                manufacturer: mfg.name,
+                name: `${stats.elemental ? 'Incendiary ' : ''}${mfg.name} ${stats.projectileCount > 1 ? 'Scattergun' : 'Blaster'}`,
+                damage: Math.round(stats.damage),
+                fireRate: Math.round(stats.fireRate),
+                projectileCount: stats.projectileCount,
+                elemental: stats.elemental,
+            };
+        }
+
+        function generateShield() {
+            const rarity = getRarity();
+            const mfgKeys = Object.keys(manufacturers);
+            const mfg = manufacturers[mfgKeys[Math.floor(Math.random() * mfgKeys.length)]];
+
+            let stats = {
+                capacity: Math.round((50 * rarities[rarity].statMultiplier) * (Math.random() * 0.4 + 0.8)),
+                rechargeRate: Math.round((5 * rarities[rarity].statMultiplier) * (Math.random() * 0.4 + 0.8)),
+                rechargeDelay: 3000,
+                type: 'standard', // for future shield types
+            };
+
+            stats = mfg.shieldBonus(stats);
+
+            // Special shield types
+            if (rarity === 'rare' || rarity === 'epic' || rarity === 'legendary') {
+                if (Math.random() < 0.2) {
+                    stats.type = 'nova';
+                    stats.novaDamage = 50 * rarities[rarity].statMultiplier;
+                    stats.novaRadius = 100 * rarities[rarity].statMultiplier;
+                }
+            }
+
+
+            return {
+                type: 'shield',
+                rarity: rarity,
+                manufacturer: mfg.name,
+                name: `${stats.type === 'nova' ? 'Nova ' : ''}${mfg.name} ${rarities[rarity].name} Deflector`,
+                capacity: Math.round(stats.capacity),
+                rechargeRate: Math.round(stats.rechargeRate),
+                rechargeDelay: Math.round(stats.rechargeDelay),
+                shieldType: stats.type,
+                novaDamage: stats.novaDamage,
+                novaRadius: stats.novaRadius,
+            };
+        }
+
+        class LootDrop {
+            constructor(x, y, item) {
+                this.x = x;
+                this.y = y;
+                this.item = item;
+                this.size = 12;
+                this.life = 1200; // 20 seconds
+            }
+
+            update() {
+                this.life--;
+            }
+
+            draw() {
+                const rarityColor = rarities[this.item.rarity].color;
+                ctx.save();
+                ctx.translate(this.x, this.y);
+
+                // Pulsing glow
+                const pulse = Math.abs(Math.sin(Date.now() / 300));
+                ctx.shadowColor = rarityColor;
+                ctx.shadowBlur = 10 + pulse * 10;
+
+                // Diamond shape
+                ctx.fillStyle = rarityColor;
+                ctx.beginPath();
+                ctx.moveTo(0, -this.size);
+                ctx.lineTo(this.size, 0);
+                ctx.lineTo(0, this.size);
+                ctx.lineTo(-this.size, 0);
+                ctx.closePath();
+                ctx.fill();
+
+                ctx.restore();
+            }
+        }
+
         // --- Game Logic Functions ---
         function init() {
             player = new Player(gameWidth / 2, gameHeight / 2, gameSpeed);
-            projectiles = []; enemies = []; powerUps = []; particles = [];
+            projectiles = []; enemies = []; powerUps = []; particles = []; lootDrops = [];
             score = 0; playerAnswer = '';
             updateScore(0); generateEquation(); updatePlayerInputDisplay();
+            updateHealthBar();
+            updateShieldBar();
         }
 
         function gameLoop() {
@@ -427,6 +698,7 @@
                 enemies.forEach(e => e.update());
                 powerUps.forEach(p => p.update());
                 particles.forEach(p => p.update());
+                lootDrops.forEach(l => l.update());
 
                 handleCollisions();
 
@@ -434,12 +706,14 @@
                 enemies = enemies.filter(e => !e.isDestroyed);
                 powerUps = powerUps.filter(p => !p.isCollected);
                 particles = particles.filter(p => p.life > 0);
+                lootDrops = lootDrops.filter(l => l.life > 0 && !l.isCollected);
             }
 
             // Draw entities (even when paused)
             if (gameState !== 'START') {
                 particles.forEach(p => p.draw());
                 powerUps.forEach(p => p.draw());
+                lootDrops.forEach(l => l.draw());
                 projectiles.forEach(p => p.draw());
                 enemies.forEach(e => e.draw());
                 player.draw();
@@ -468,28 +742,68 @@
             projectiles.forEach(p => {
                 enemies.forEach(e => {
                     if (Math.hypot(p.x - e.x, p.y - e.y) < p.size + e.size / 2) {
-                        e.takeDamage(1); p.life = 0; createParticles(p.x, p.y, 5, p.color);
+                        e.takeDamage(p.damage, p.elemental);
+                        p.life = 0;
+                        createParticles(p.x, p.y, 5, p.color);
                     }
                 });
             });
 
             enemies.forEach(e => {
                 if (Math.hypot(player.x - e.x, player.y - e.y) < player.size + e.size / 2) {
-                    e.destroy(); player.takeDamage(10); updateHealthBar();
+                    e.destroy();
+                    player.takeDamage(10);
                 }
             });
 
             powerUps.forEach(p => {
                 if (Math.hypot(player.x - p.x, player.y - p.y) < player.size + p.size) {
-                    activatePowerUp(p); p.isCollected = true;
+                    activatePowerUp(p);
+                    p.isCollected = true;
                 }
             });
+
+            lootDrops.forEach(l => {
+                if (Math.hypot(player.x - l.x, player.y - l.y) < player.size + l.size) {
+                    activateLoot(l);
+                    l.isCollected = true;
+                }
+            });
+        }
+
+        function activateLoot(loot) {
+            powerupSound();
+            createParticles(loot.x, loot.y, 30, rarities[loot.item.rarity].color);
+            switch(loot.item.type) {
+                case 'weapon':
+                    player.weapon = loot.item;
+                    break;
+                case 'shield':
+                    player.shield = loot.item;
+                    player.shield.current = loot.item.capacity; // Refill shield on pickup
+                    player.shield.rechargeTimer = 0;
+                    updateShieldBar();
+                    break;
+                case 'bomb':
+                    // Detonate bomb on pickup
+                    createParticles(loot.x, loot.y, 50, rarities[loot.item.rarity].color);
+                    explosionSound();
+                    enemies.forEach(e => {
+                        if (Math.hypot(loot.x - e.x, loot.y - e.y) < loot.item.radius) {
+                            e.takeDamage(100, null); // Bombs do massive damage
+                        }
+                    });
+                    break;
+            }
         }
 
         function activatePowerUp(powerUp) {
             powerupSound(); createParticles(powerUp.x, powerUp.y, 30, powerUp.color);
             switch(powerUp.type) {
-                case 'shield': player.hasShield = true; break;
+                case 'shield':
+                    player.shield.current = player.shield.capacity;
+                    updateShieldBar();
+                    break;
                 case 'bomb': enemies.forEach(e => e.destroy()); enemies = []; break;
                 case 'fast_fire': player.fastFireTimer = 300; break;
             }
@@ -624,6 +938,12 @@
         // --- UI Update Functions ---
         function updateScore(amount) { score += amount; scoreDisplay.textContent = score; }
         function updateHealthBar() { healthBar.style.width = `${(player.health / player.maxHealth) * 100}%`; }
+        function updateShieldBar() {
+            if (player && player.shield) {
+                const shieldPercentage = (player.shield.current / player.shield.capacity) * 100;
+                shieldBar.style.width = `${shieldPercentage}%`;
+            }
+        }
         function updatePlayerInputDisplay() { playerInputDisplay.textContent = playerAnswer || '_'; }
         function updateOverdriveBar() { overdriveBar.style.width = `${(overdriveTimer / OVERDRIVE_DURATION) * 100}%`; }
 
@@ -654,6 +974,14 @@
                 modalTitle.textContent = 'GAME OVER';
                 modalText.textContent = `Your final score on ${['','Easy','Normal','Hard'][difficulty]} difficulty: ${score}`;
                 startButton.textContent = 'Retry';
+            } else if (newState === 'START') {
+                modal.classList.remove('hidden');
+                hud.classList.add('hidden');
+                modalTitle.textContent = 'GRIDFIRE';
+                modalText.innerHTML = `Solve math problems to charge your super-weapon. Survive the onslaught.</p>
+                <p class="mb-2 text-sm">CONTROLS:</p>
+                <p class="mb-6 text-sm"><span class="font-bold text-cyan-300">WASD</span> Move | <span class="font-bold text-cyan-300">Mouse</span> Aim/Shoot | <span class="font-bold text-cyan-300">0-9</span> Type Answer | <span class="font-bold text-cyan-300">Enter</span> Submit`;
+                startButton.textContent = 'Start Game';
             }
         }
 
@@ -661,7 +989,9 @@
         window.addEventListener('keydown', e => {
             keys[e.key.toLowerCase()] = true;
             if (gameState === 'PLAYING' || gameState === 'OVERDRIVE' || gameState === 'PAUSED') {
-                if (!isNaN(e.key) && e.key.trim() !== '') {
+                if (e.key === 'Escape') {
+                    setGameState('START');
+                } else if (!isNaN(e.key) && e.key.trim() !== '') {
                     playerAnswer += e.key; updatePlayerInputDisplay();
                 } else if (e.key === 'Backspace') {
                     playerAnswer = playerAnswer.slice(0, -1); updatePlayerInputDisplay();
